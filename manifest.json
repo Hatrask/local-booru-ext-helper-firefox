@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Local Booru Uploader",
-  "version": "1.0",
+  "version": "1.1",
   "description": "Scrapes an image and its tags from Danbooru and sends it to your self-hosted local-booru.",
   "permissions": [
     "activeTab",
@@ -24,5 +24,15 @@
   "icons": {
     "48": "icons/icon-48.png",
     "96": "icons/icon-96.png"
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "icons/icon-loading.png",
+        "icons/icon-success.png",
+        "icons/icon-error.png"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }
