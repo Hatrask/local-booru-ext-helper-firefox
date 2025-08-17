@@ -8,21 +8,34 @@
         let imageUrl = '';
         const tags = [];
 
-        // 1. Find the image URL.
-        // Danbooru provides a specific link for the original, larger image if it's been resized for display.
-        // We prioritize this link to get the best quality version.
-        const originalLink = document.querySelector('#image-resize-notice a.image-view-original-link');
+        // 1. Find the image URL using a more robust, prioritized method.
 
+        // Priority 1: Check for the "View Original" link for very large images.
+        // This is the highest quality source when available.
+        const originalLink = document.querySelector('#image-resize-notice a.image-view-original-link');
         if (originalLink) {
             imageUrl = originalLink.href;
-        } else {
-            // If the resize notice isn't present, the main image is the original.
-            const imageElement = document.querySelector('picture#image img');
+        }
+
+        // Priority 2: If no resize link, check for the 'data-file-url' attribute on the container.
+        // This is a very reliable source for the direct file URL.
+        if (!imageUrl) {
+            const imageContainer = document.querySelector('.image-container[data-file-url]');
+            if (imageContainer) {
+                // The dataset property provides easy access to data-* attributes.
+                imageUrl = imageContainer.dataset.fileUrl;
+            }
+        }
+
+        // Priority 3 (Fallback): If the data attribute isn't found, find the main image element
+        // by its ID and get its 'src' attribute. This selector is now corrected.
+        if (!imageUrl) {
+            const imageElement = document.querySelector('img#image'); // CORRECTED SELECTOR
             if (imageElement) {
                 imageUrl = imageElement.src;
             }
         }
-
+        
         if (!imageUrl) {
             return { error: 'Could not find the main image URL on the page.' };
         }
@@ -44,15 +57,12 @@
 
         // 3. Iterate through each category and extract the tags.
         for (const [className, category] of Object.entries(tagCategoryMapping)) {
-            // Target only <ul> elements with the specified class within the tag section for precision.
             const tagUl = tagListSection.querySelector(`ul.${className}`);
             if (tagUl) {
                 const listItems = tagUl.querySelectorAll('li[data-tag-name]');
                 listItems.forEach(li => {
                     const tagName = li.dataset.tagName;
                     if (tagName) {
-                        // For all categories except 'general', prefix the tag with its category.
-                        // Your backend's get_or_create_tags function is designed to handle this format.
                         if (category === 'general') {
                             tags.push(tagName);
                         } else {
