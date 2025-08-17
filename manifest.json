@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Local Booru Uploader",
+  "version": "1.0",
+  "description": "Scrapes an image and its tags from Danbooru and sends it to your self-hosted local-booru.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "notifications"
+  ],
+  "host_permissions": [
+    "*://*.donmai.us/*",
+    "http://127.0.0.1:8000/*"
+  ],
+  "action": {
+    "default_icon": {
+      "48": "icons/icon-48.png"
+    },
+    "default_title": "Upload to Local Booru"
+  },
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "icons": {
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png"
+  }
+}
