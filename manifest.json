@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "Local Booru Uploader",
-  "version": "2.0",
+  "name": "local-booru Danbooru Scraper",
+  "version": "2.1",
   "description": "Scrapes an image and its tags from Danbooru and sends it to your self-hosted local-booru.",
   "permissions": [
     "activeTab",
@@ -17,7 +17,7 @@
     "default_icon": {
       "48": "icons/icon-48.png"
     },
-    "default_title": "Upload to Local Booru"
+    "default_title": "Upload to local-booru"
   },
   "background": {
     "scripts": ["background.js"]

@@ -10,7 +10,8 @@ let multiUploadState = {
     total: 0,
     processed: 0,
     success: 0,
-    failures: 0
+    failures: 0,
+    alreadyExisted: 0
 };
 
 
@@ -73,10 +74,12 @@ function handleMultiUploadResult(status, tabId) {
 
     // If all tabs in the batch have been processed, show the final report
     if (multiUploadState.processed >= multiUploadState.total) {
-        showTemporaryNotification(
-            "Multi-Upload Complete",
-            `${multiUploadState.success} succeeded, ${multiUploadState.failures} failed.`
-        );
+        let finalMessage = `${multiUploadState.success} succeeded, ${multiUploadState.failures} failed.`;
+        if (multiUploadState.alreadyExisted > 0) {
+            finalMessage += ` (${multiUploadState.alreadyExisted} already existed).`;
+        }
+
+        showTemporaryNotification("Upload Complete", finalMessage);
         // Reset the state machine for the next batch
         multiUploadState.inProgress = false;
     }
@@ -100,7 +103,8 @@ function handleMultiTabUpload() {
             total: danbooruTabs.length,
             processed: 0,
             success: 0,
-            failures: 0
+            failures: 0,
+            alreadyExisted: 0
         };
 
         // Start the scraping process for each valid tab
@@ -158,6 +162,11 @@ function processScrapedData(scrapedData, tabId) {
     })
     .then(data => {
         uploadStatus = 'success';
+        
+        if (multiUploadState.inProgress && data.message && data.message.toLowerCase().includes("already exists")) {
+            multiUploadState.alreadyExisted++;
+        }
+
         if (!multiUploadState.inProgress) {
             showTemporaryNotification("Upload Complete", data.message);
         }
@@ -183,15 +192,31 @@ function processScrapedData(scrapedData, tabId) {
 // --- Main Event Listeners ---
 
 /**
+ * Enables or disables the multi-upload context menu item based on tab selection.
+ */
+function updateContextMenu() {
+    browser.tabs.query({ highlighted: true, currentWindow: true }).then(tabs => {
+        browser.contextMenus.update("upload-selected-tabs", {
+            enabled: tabs.length > 1
+        });
+    });
+}
+
+
+/**
  * Creates the context menu item when the extension is installed.
  */
 browser.runtime.onInstalled.addListener(() => {
     browser.contextMenus.create({
         id: "upload-selected-tabs",
-        title: "Upload selected tabs to Local Booru",
-        contexts: ["tab"]
+        title: "Upload selected tabs to local-booru",
+        contexts: ["tab"],
+        enabled: false
     });
 });
+
+browser.tabs.onHighlighted.addListener(updateContextMenu);
+browser.windows.onFocusChanged.addListener(updateContextMenu);
 
 /**
  * Listens for clicks on the context menu item.
