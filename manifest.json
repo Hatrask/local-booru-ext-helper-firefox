@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Local Booru Uploader",
-  "version": "1.2",
+  "version": "2.0",
   "description": "Scrapes an image and its tags from Danbooru and sends it to your self-hosted local-booru.",
   "permissions": [
     "activeTab",
     "scripting",
-    "notifications"
+    "notifications",
+    "contextMenus"
   ],
   "host_permissions": [
     "*://*.donmai.us/*",

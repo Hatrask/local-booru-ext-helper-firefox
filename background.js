@@ -4,6 +4,16 @@ const DANBOORU_POST_URL_FRAGMENT = "donmai.us/posts/";
 const NOTIFICATION_DISPLAY_TIME_MS = 4000; // Notifications will disappear after 4 seconds
 const ICON_RESET_DELAY_MS = 3000; // Status icon will revert to default after 3 seconds
 
+// --- State Management for Multi-Upload ---
+let multiUploadState = {
+    inProgress: false,
+    total: 0,
+    processed: 0,
+    success: 0,
+    failures: 0
+};
+
+
 // --- Helper Functions ---
 
 /**
@@ -43,71 +53,186 @@ function showTemporaryNotification(title, message) {
     });
 }
 
+/**
+ * Handles the result of a single upload within a multi-upload batch.
+ * @param {'success' | 'failure'} status - The outcome of the upload attempt.
+ * @param {number} tabId - The ID of the tab that was processed.
+ */
+function handleMultiUploadResult(status, tabId) {
+    multiUploadState.processed++;
+    if (status === 'success') {
+        multiUploadState.success++;
+        updateIcon('success', tabId);
+    } else {
+        multiUploadState.failures++;
+        updateIcon('error', tabId);
+    }
+
+    // Reset the icon for the individual tab after a delay
+    setTimeout(() => updateIcon('default', tabId), ICON_RESET_DELAY_MS);
+
+    // If all tabs in the batch have been processed, show the final report
+    if (multiUploadState.processed >= multiUploadState.total) {
+        showTemporaryNotification(
+            "Multi-Upload Complete",
+            `${multiUploadState.success} succeeded, ${multiUploadState.failures} failed.`
+        );
+        // Reset the state machine for the next batch
+        multiUploadState.inProgress = false;
+    }
+}
+
+/**
+ * Initiates the scraping and uploading process for a collection of tabs.
+ */
+function handleMultiTabUpload() {
+    browser.tabs.query({ highlighted: true, currentWindow: true }).then(tabs => {
+        const danbooruTabs = tabs.filter(t => t.url && t.url.includes(DANBOORU_POST_URL_FRAGMENT));
+
+        if (danbooruTabs.length === 0) {
+            showTemporaryNotification("No Valid Tabs", "No selected tabs are Danbooru post pages.");
+            return;
+        }
+
+        // Initialize the state for this batch
+        multiUploadState = {
+            inProgress: true,
+            total: danbooruTabs.length,
+            processed: 0,
+            success: 0,
+            failures: 0
+        };
+
+        // Start the scraping process for each valid tab
+        danbooruTabs.forEach(tab => {
+            updateIcon('loading', tab.id);
+            browser.scripting.executeScript({
+                target: { tabId: tab.id },
+                files: ["scraper.js"],
+            }).catch(err => {
+                // This handles cases where script injection itself fails
+                console.error(`Script injection failed for tab ${tab.id}:`, err);
+                // Since the scraper won't run, it won't send a message. We must handle its failure here.
+                handleMultiUploadResult('failure', tab.id);
+            });
+        });
+    });
+}
+
+
+/**
+ * Processes the scraped data received from the content script.
+ * @param {object} scrapedData - The data object from scraper.js.
+ * @param {number} tabId - The ID of the tab where the data was scraped.
+ */
+function processScrapedData(scrapedData, tabId) {
+    const { imageUrl, tags, error } = scrapedData;
+
+    // Handle scraping errors
+    if (error || !imageUrl) {
+        console.error(`Scraping failed for tab ${tabId}: ${error || 'Unknown'}`);
+        if (multiUploadState.inProgress) {
+            handleMultiUploadResult('failure', tabId);
+        } else {
+            updateIcon('error', tabId);
+            showTemporaryNotification("Scraping Failed", `Could not retrieve image data. Error: ${error || 'Unknown'}`);
+            setTimeout(() => updateIcon('default', tabId), ICON_RESET_DELAY_MS);
+        }
+        return;
+    }
+
+    let uploadStatus = 'error'; // Assume failure until proven otherwise
+
+    fetch(LOCAL_BOORU_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_url: imageUrl, tags: tags }),
+    })
+    .then(response => {
+        if (!response.ok) {
+            return response.json().then(err => {
+                throw new Error(err.detail || `HTTP error! Status: ${response.status}`);
+            });
+        }
+        return response.json();
+    })
+    .then(data => {
+        uploadStatus = 'success';
+        if (!multiUploadState.inProgress) {
+            showTemporaryNotification("Upload Complete", data.message);
+        }
+    })
+    .catch(err => {
+        console.error("Error uploading to local-booru:", err);
+        if (!multiUploadState.inProgress) {
+            showTemporaryNotification("Upload Failed", `Could not send data to local-booru. Error: ${err.message}`);
+        }
+    })
+    .finally(() => {
+        if (multiUploadState.inProgress) {
+            handleMultiUploadResult(uploadStatus, tabId);
+        } else {
+            // Handle icon updates for single-tab uploads
+            updateIcon(uploadStatus, tabId);
+            setTimeout(() => updateIcon('default', tabId), ICON_RESET_DELAY_MS);
+        }
+    });
+}
+
+
 // --- Main Event Listeners ---
+
+/**
+ * Creates the context menu item when the extension is installed.
+ */
+browser.runtime.onInstalled.addListener(() => {
+    browser.contextMenus.create({
+        id: "upload-selected-tabs",
+        title: "Upload selected tabs to Local Booru",
+        contexts: ["tab"]
+    });
+});
+
+/**
+ * Listens for clicks on the context menu item.
+ */
+browser.contextMenus.onClicked.addListener((info, tab) => {
+    if (info.menuItemId === "upload-selected-tabs") {
+        handleMultiTabUpload();
+    }
+});
+
 
 /**
  * Listens for the user clicking the browser action icon.
  */
 browser.action.onClicked.addListener((tab) => {
-    if (tab.url && tab.url.includes(DANBOORU_POST_URL_FRAGMENT)) {
-        // Set the icon to "loading" immediately for instant feedback
-        updateIcon('loading', tab.id);
-        browser.scripting.executeScript({
-            target: { tabId: tab.id },
-            files: ["scraper.js"],
-        });
-    } else {
-        showTemporaryNotification("Incorrect Page", "This extension only works on Danbooru post pages.");
-    }
+    // Check if multiple tabs are highlighted to decide between single vs. multi-upload
+    browser.tabs.query({ highlighted: true, currentWindow: true }).then(tabs => {
+        if (tabs.length > 1) {
+            handleMultiTabUpload();
+        } else {
+            // Standard single-tab upload logic
+            if (tab.url && tab.url.includes(DANBOORU_POST_URL_FRAGMENT)) {
+                updateIcon('loading', tab.id);
+                browser.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    files: ["scraper.js"],
+                });
+            } else {
+                showTemporaryNotification("Incorrect Page", "This extension only works on Danbooru post pages.");
+            }
+        }
+    });
 });
+
 
 /**
  * Listens for messages from the content script (scraper.js).
  */
 browser.runtime.onMessage.addListener((message, sender) => {
-    // Get the tab ID from the sender information
     const tabId = sender.tab.id;
-
     if (message.action === "scrapedData") {
-        const { imageUrl, tags, error } = message.data;
-
-        if (error || !imageUrl) {
-            updateIcon('error', tabId);
-            showTemporaryNotification("Scraping Failed", `Could not retrieve image data. Error: ${error || 'Unknown'}`);
-            // Reset the icon after a short delay
-            setTimeout(() => updateIcon('default', tabId), ICON_RESET_DELAY_MS);
-            return;
-        }
-        
-        // Use a finally block to ensure the icon is always reset
-        let uploadStatus = 'error'; 
-
-        fetch(LOCAL_BOORU_API_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image_url: imageUrl, tags: tags }),
-        })
-        .then(response => {
-            if (!response.ok) {
-                return response.json().then(err => {
-                    throw new Error(err.detail || `HTTP error! Status: ${response.status}`);
-                });
-            }
-            return response.json();
-        })
-        .then(data => {
-            uploadStatus = 'success'; // Mark as success for the finally block
-            showTemporaryNotification("Upload Complete", data.message);
-        })
-        .catch(error => {
-            console.error("Error uploading to local-booru:", error);
-            showTemporaryNotification("Upload Failed", `Could not send data to local-booru. Error: ${error.message}`);
-        })
-        .finally(() => {
-            // Update the icon based on the final status of the upload
-            updateIcon(uploadStatus, tabId);
-            // Schedule the icon to reset back to the default state
-            setTimeout(() => updateIcon('default', tabId), ICON_RESET_DELAY_MS);
-        });
+        processScrapedData(message.data, tabId);
     }
 });
