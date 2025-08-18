@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "local-booru Danbooru Scraper",
   "version": "2.1",
-  "description": "Scrapes an image and its tags from Danbooru and sends it to your self-hosted local-booru.",
+  "description": "Scrapes an image and its tags from Danbooru and sends it to your self-hosted local-booru instance.",
   "permissions": [
     "activeTab",
     "scripting",
