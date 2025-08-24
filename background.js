@@ -8,6 +8,7 @@ const CONCURRENT_UPLOAD_LIMIT = 8; // How many uploads to process at the same ti
 // --- State Management for Multi-Upload ---
 let multiUploadState = {
     inProgress: false,
+    activeTabId: null, // The tab where the multi-upload was initiated, for global icon state
     total: 0,
     processed: 0,
     success: 0,
@@ -71,10 +72,10 @@ function handleMultiUploadResult(status, tabId) {
         updateIcon('error', tabId);
     }
 
-    // Reset the icon for the individual tab after a delay
+    // Reset the icon for the individual *background* tab after a delay.
     setTimeout(() => updateIcon('default', tabId), ICON_RESET_DELAY_MS);
 
-    // If all tabs in the batch have been processed, show the final report
+    // If all tabs in the batch have been processed, show the final report and update the *global* icon.
     if (multiUploadState.processed >= multiUploadState.total) {
         let finalMessage = `${multiUploadState.success} succeeded, ${multiUploadState.failures} failed.`;
         if (multiUploadState.alreadyExisted > 0) {
@@ -82,7 +83,15 @@ function handleMultiUploadResult(status, tabId) {
         }
 
         showTemporaryNotification("Upload Complete", finalMessage);
-        // Reset the state machine for the next batch
+        
+        // Update the main icon to reflect the overall job status.
+        const overallStatus = multiUploadState.failures > 0 ? 'error' : 'success';
+        updateIcon(overallStatus, multiUploadState.activeTabId);
+        
+        // Reset the main icon after a delay.
+        setTimeout(() => updateIcon('default', multiUploadState.activeTabId), ICON_RESET_DELAY_MS);
+
+        // Reset the state machine for the next batch.
         multiUploadState.inProgress = false;
     }
 }
@@ -98,7 +107,8 @@ function startNextUploadFromQueue() {
 
     const tab = tabProcessingQueue.shift();
 
-    updateIcon('loading', tab.id);
+    // No need to set the loading icon here, as the global icon is already loading.
+    // If desired, you could still call `updateIcon('loading', tab.id)` for per-tab feedback.
     browser.scripting.executeScript({
         target: { tabId: tab.id },
         files: ["scraper.js"],
@@ -114,8 +124,9 @@ function startNextUploadFromQueue() {
 
 /**
  * Initiates the scraping and uploading process for a collection of tabs.
+ * @param {number} activeTabId - The ID of the tab where the action was initiated.
  */
-function handleMultiTabUpload() {
+function handleMultiTabUpload(activeTabId) {
     browser.tabs.query({ highlighted: true, currentWindow: true }).then(tabs => {
         const validTabs = tabs.filter(t => t.url && SUPPORTED_URL_FRAGMENTS.some(frag => t.url.includes(frag)));
 
@@ -123,10 +134,14 @@ function handleMultiTabUpload() {
             showTemporaryNotification("No Valid Tabs", "No selected tabs are supported booru post pages.");
             return;
         }
+        
+        // Set the global icon to 'loading' immediately for instant feedback.
+        updateIcon('loading', activeTabId);
 
         // Initialize the state for this batch
         multiUploadState = {
             inProgress: true,
+            activeTabId: activeTabId,
             total: validTabs.length,
             processed: 0,
             success: 0,
@@ -252,7 +267,7 @@ browser.windows.onFocusChanged.addListener(updateContextMenu);
  */
 browser.contextMenus.onClicked.addListener((info, tab) => {
     if (info.menuItemId === "upload-selected-tabs") {
-        handleMultiTabUpload();
+        handleMultiTabUpload(tab.id);
     }
 });
 
@@ -261,10 +276,16 @@ browser.contextMenus.onClicked.addListener((info, tab) => {
  * Listens for the user clicking the browser action icon.
  */
 browser.action.onClicked.addListener((tab) => {
+    // If a multi-upload is already running, do nothing.
+    if (multiUploadState.inProgress) {
+        showTemporaryNotification("Upload in Progress", "Please wait for the current batch to complete.");
+        return;
+    }
+
     // Check if multiple tabs are highlighted to decide between single vs. multi-upload
     browser.tabs.query({ highlighted: true, currentWindow: true }).then(tabs => {
         if (tabs.length > 1) {
-            handleMultiTabUpload();
+            handleMultiTabUpload(tab.id);
         } else {
             // Standard single-tab upload logic
             if (tab.url && SUPPORTED_URL_FRAGMENTS.some(frag => tab.url.includes(frag))) {
