@@ -4,6 +4,7 @@ const SUPPORTED_URL_FRAGMENTS = ["donmai.us/posts/", "aibooru.online/posts/"];
 const NOTIFICATION_DISPLAY_TIME_MS = 4000; // Notifications will disappear after 4 seconds
 const ICON_RESET_DELAY_MS = 3000; // Status icon will revert to default after 3 seconds
 const CONCURRENT_UPLOAD_LIMIT = 8; // How many uploads to process at the same time. Adjust based on your PC/server performance.
+const UPLOAD_TIMEOUT_MS = 30000; // Timeout for a single upload request (30 seconds)
 
 // --- State Management for Multi-Upload ---
 let multiUploadState = {
@@ -188,35 +189,56 @@ function processScrapedData(scrapedData, tabId) {
     }
 
     let uploadStatus = 'error'; // Assume failure until proven otherwise
+    
+    // NEW: Use an AbortController to implement a timeout for the fetch request.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
 
     fetch(LOCAL_BOORU_API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_url: imageUrl, tags: tags }),
+        // NEW: Ensure tags is always an array, even if the scraper fails.
+        body: JSON.stringify({ image_url: imageUrl, tags: tags || [] }),
+        signal: controller.signal // Link the abort controller to the request
     })
     .then(response => {
-        if (!response.ok) {
-            return response.json().then(err => {
-                throw new Error(err.detail || `HTTP error! Status: ${response.status}`);
-            });
-        }
-        return response.json();
+        // If we get a response, clear the timeout.
+        clearTimeout(timeoutId);
+        // Chain the promise to parse the JSON body and pass both the response and body along.
+        return response.json().then(body => ({ response, body }));
     })
-    .then(data => {
+    .then(({ response, body }) => {
+        // Handle non-ok responses (e.g., 4xx, 5xx errors)
+        if (!response.ok) {
+            // Throw an error using the detail message from the FastAPI backend.
+            throw new Error(body.detail || `HTTP error! Status: ${response.status}`);
+        }
+        
         uploadStatus = 'success';
         
-        if (multiUploadState.inProgress && data.message && data.message.toLowerCase().includes("already exists")) {
+        // NEW: Use the reliable HTTP status code to check for duplicates, not the message text.
+        // 200 OK = Duplicate, 201 Created = New Upload.
+        if (multiUploadState.inProgress && response.status === 200) {
             multiUploadState.alreadyExisted++;
         }
 
+        // For single uploads, show the success message from the server.
         if (!multiUploadState.inProgress) {
-            showTemporaryNotification("Upload Complete", data.message);
+            showTemporaryNotification("Upload Complete", body.message);
         }
     })
     .catch(err => {
+        // Also clear the timeout in case of an error.
+        clearTimeout(timeoutId);
+        let userMessage = `Could not send data to local-booru. Error: ${err.message}`;
+        // NEW: Provide a more user-friendly message for timeouts.
+        if (err.name === 'AbortError') {
+            userMessage = "Upload failed: The request timed out.";
+        }
+        
         console.error("Error uploading to local-booru:", err);
         if (!multiUploadState.inProgress) {
-            showTemporaryNotification("Upload Failed", `Could not send data to local-booru. Error: ${err.message}`);
+            showTemporaryNotification("Upload Failed", userMessage);
         }
     })
     .finally(() => {
