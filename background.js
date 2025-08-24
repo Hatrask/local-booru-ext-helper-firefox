@@ -3,6 +3,7 @@ const LOCAL_BOORU_API_URL = "http://127.0.0.1:8000/api/upload_from_url";
 const SUPPORTED_URL_FRAGMENTS = ["donmai.us/posts/", "aibooru.online/posts/"];
 const NOTIFICATION_DISPLAY_TIME_MS = 4000; // Notifications will disappear after 4 seconds
 const ICON_RESET_DELAY_MS = 3000; // Status icon will revert to default after 3 seconds
+const CONCURRENT_UPLOAD_LIMIT = 8; // How many uploads to process at the same time. Adjust based on your PC/server performance.
 
 // --- State Management for Multi-Upload ---
 let multiUploadState = {
@@ -13,6 +14,7 @@ let multiUploadState = {
     failures: 0,
     alreadyExisted: 0
 };
+let tabProcessingQueue = [];
 
 
 // --- Helper Functions ---
@@ -86,13 +88,38 @@ function handleMultiUploadResult(status, tabId) {
 }
 
 /**
+ * Takes the next tab from the queue and starts the scraping process.
+ * This function acts as a "worker" in our queue system.
+ */
+function startNextUploadFromQueue() {
+    if (tabProcessingQueue.length === 0) {
+        return; // All tabs have been processed
+    }
+
+    const tab = tabProcessingQueue.shift();
+
+    updateIcon('loading', tab.id);
+    browser.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ["scraper.js"],
+    }).catch(err => {
+        // This handles cases where script injection itself fails
+        console.error(`Script injection failed for tab ${tab.id}:`, err);
+        // Since the scraper won't run, it won't send a message. We must handle its failure here.
+        handleMultiUploadResult('failure', tab.id);
+        // Crucially, we must trigger the next item in the queue
+        startNextUploadFromQueue();
+    });
+}
+
+/**
  * Initiates the scraping and uploading process for a collection of tabs.
  */
 function handleMultiTabUpload() {
     browser.tabs.query({ highlighted: true, currentWindow: true }).then(tabs => {
-        const danbooruTabs = tabs.filter(t => t.url && SUPPORTED_URL_FRAGMENTS.some(frag => t.url.includes(frag)));
+        const validTabs = tabs.filter(t => t.url && SUPPORTED_URL_FRAGMENTS.some(frag => t.url.includes(frag)));
 
-        if (danbooruTabs.length === 0) {
+        if (validTabs.length === 0) {
             showTemporaryNotification("No Valid Tabs", "No selected tabs are supported booru post pages.");
             return;
         }
@@ -100,26 +127,21 @@ function handleMultiTabUpload() {
         // Initialize the state for this batch
         multiUploadState = {
             inProgress: true,
-            total: danbooruTabs.length,
+            total: validTabs.length,
             processed: 0,
             success: 0,
             failures: 0,
             alreadyExisted: 0
         };
+        
+        // Populate the queue with all the tabs that need to be processed
+        tabProcessingQueue = [...validTabs];
 
-        // Start the scraping process for each valid tab
-        danbooruTabs.forEach(tab => {
-            updateIcon('loading', tab.id);
-            browser.scripting.executeScript({
-                target: { tabId: tab.id },
-                files: ["scraper.js"],
-            }).catch(err => {
-                // This handles cases where script injection itself fails
-                console.error(`Script injection failed for tab ${tab.id}:`, err);
-                // Since the scraper won't run, it won't send a message. We must handle its failure here.
-                handleMultiUploadResult('failure', tab.id);
-            });
-        });
+        // Start the initial batch of workers. As each worker finishes, it will
+        // automatically pick up the next item from the queue.
+        for (let i = 0; i < CONCURRENT_UPLOAD_LIMIT; i++) {
+            startNextUploadFromQueue();
+        }
     });
 }
 
@@ -141,6 +163,11 @@ function processScrapedData(scrapedData, tabId) {
             updateIcon('error', tabId);
             showTemporaryNotification("Scraping Failed", `Could not retrieve image data. Error: ${error || 'Unknown'}`);
             setTimeout(() => updateIcon('default', tabId), ICON_RESET_DELAY_MS);
+        }
+        
+        // If this was part of a multi-upload, start the next task
+        if (multiUploadState.inProgress) {
+            startNextUploadFromQueue();
         }
         return;
     }
@@ -180,6 +207,8 @@ function processScrapedData(scrapedData, tabId) {
     .finally(() => {
         if (multiUploadState.inProgress) {
             handleMultiUploadResult(uploadStatus, tabId);
+            // After this task is done, try to start the next one in the queue.
+            startNextUploadFromQueue();
         } else {
             // Handle icon updates for single-tab uploads
             updateIcon(uploadStatus, tabId);
