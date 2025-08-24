@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "local-booru Danbooru Scraper",
-  "version": "2.1",
+  "version": "2.2",
   "description": "Scrapes an image and its tags from Danbooru and sends it to your self-hosted local-booru instance.",
   "permissions": [
     "activeTab",
@@ -11,6 +11,7 @@
   ],
   "host_permissions": [
     "*://*.donmai.us/*",
+    "*://aibooru.online/*",
     "http://127.0.0.1:8000/*"
   ],
   "action": {

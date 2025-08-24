@@ -1,6 +1,6 @@
 // Configuration
 const LOCAL_BOORU_API_URL = "http://127.0.0.1:8000/api/upload_from_url";
-const DANBOORU_POST_URL_FRAGMENT = "donmai.us/posts/";
+const SUPPORTED_URL_FRAGMENTS = ["donmai.us/posts/", "aibooru.online/posts/"];
 const NOTIFICATION_DISPLAY_TIME_MS = 4000; // Notifications will disappear after 4 seconds
 const ICON_RESET_DELAY_MS = 3000; // Status icon will revert to default after 3 seconds
 
@@ -90,10 +90,10 @@ function handleMultiUploadResult(status, tabId) {
  */
 function handleMultiTabUpload() {
     browser.tabs.query({ highlighted: true, currentWindow: true }).then(tabs => {
-        const danbooruTabs = tabs.filter(t => t.url && t.url.includes(DANBOORU_POST_URL_FRAGMENT));
+        const danbooruTabs = tabs.filter(t => t.url && SUPPORTED_URL_FRAGMENTS.some(frag => t.url.includes(frag)));
 
         if (danbooruTabs.length === 0) {
-            showTemporaryNotification("No Valid Tabs", "No selected tabs are Danbooru post pages.");
+            showTemporaryNotification("No Valid Tabs", "No selected tabs are supported booru post pages.");
             return;
         }
 
@@ -238,14 +238,14 @@ browser.action.onClicked.addListener((tab) => {
             handleMultiTabUpload();
         } else {
             // Standard single-tab upload logic
-            if (tab.url && tab.url.includes(DANBOORU_POST_URL_FRAGMENT)) {
+            if (tab.url && SUPPORTED_URL_FRAGMENTS.some(frag => tab.url.includes(frag))) {
                 updateIcon('loading', tab.id);
                 browser.scripting.executeScript({
                     target: { tabId: tab.id },
                     files: ["scraper.js"],
                 });
             } else {
-                showTemporaryNotification("Incorrect Page", "This extension only works on Danbooru post pages.");
+                showTemporaryNotification("Incorrect Page", "This extension only works on supported booru post pages.");
             }
         }
     });
